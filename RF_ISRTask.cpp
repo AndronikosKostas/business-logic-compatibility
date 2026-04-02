@@ -22,14 +22,14 @@
                         }
                         if (invalid_retries == 0) {
                             LOG_ERROR << "[ISR] Timeout waiting for valid state, skipping IRQ handling";
-                            REPORT_ERROR_WITH_CONTEXT(TTC_ERROR_RF_ISR_TIMEOUT, false, 50);
+                            REPORT_ERROR_WITH_CONTEXT(TTC_ERROR_RF_ISR_TIMEOUT, false, false, 1);
                             reportComponentFailure(Component::RF_TRANSCEIVER);
                         } else {
                             transceiver.handleIrq(error_);
                             if (error_ != NO_ERRORS) {
                                 UnifiedModuleError unified(error_);
                                 SpacecraftErrorCode spacecraft_error_code = mapSpacecraftErrorCode(unified);
-                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 1);
+                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, false, 1);
                                 reportComponentFailure(Component::RF_TRANSCEIVER);
                             }
                         }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ErrorMaps.hpp"
+#include "EventReportService.hpp"
 #include "StateMachineTask.hpp"
 #include "String.hpp"
 
@@ -19,13 +20,12 @@
 #define EPS_BUF_SIZE 500
 #define MAX_CW_CHARS 50
 
-
-#define FIXED_LENGTH_AT_SIZE_TX 512
-#define FIXED_LENGTH_AT_SIZE_RX 512
+#define FIXED_LENGTH_AT_SIZE 196
 
 #define CRC_LENGTH 4
 #define PREAMBLE_LENGTH 32
 
+class EventReportService;
 static uint8_t LUT[255] = {
     0xff, 0x48, 0x0e, 0xc0, 0x9a, 0x0d, 0x70, 0xbc, 0x8e, 0x2c, 0x93, 0xad,
     0xa7, 0xb7, 0x46, 0xce, 0x5a, 0x97, 0x7d, 0xcc, 0x32, 0xa2, 0xbf, 0x3e,
@@ -50,23 +50,23 @@ static uint8_t LUT[255] = {
     0x4b, 0xbe, 0xe6, 0x19, 0x51, 0x5f, 0x9f, 0x05, 0x08, 0x78, 0xc4, 0x4a,
     0x66, 0xf5, 0x58};
 
-#define REPORT_ERROR_WITH_CONTEXT(code, isr, ms_to_wait_if_queue_is_full)        \
+#define REPORT_ERROR_WITH_CONTEXT(code, real_time, isr, queue_ms_wait)        \
 do {                                                                         \
-char context_buffer[128];                                                \
+char context_buffer[90];                                                \
 buildErrorContext(context_buffer, sizeof(context_buffer), __FILE__, __LINE__, __func__); \
-reportError(code, isr, ms_to_wait_if_queue_is_full, context_buffer);     \
+reportError(code, context_buffer, real_time, isr, queue_ms_wait);     \
 } while (0)
 
 
 enum class Component : uint8_t;
 struct PacketHandler {
-    uint8_t buf[FIXED_LENGTH_AT_SIZE_TX];
+    uint8_t buf[FIXED_LENGTH_AT_SIZE];
     int16_t data_length;
-    bool beacon_active = false;
+    bool real_time = false;
 
     // Constructor
     PacketHandler(const uint8_t* init_data = nullptr, int16_t length = 0) : data_length(length) {
-        if (init_data && length <= FIXED_LENGTH_AT_SIZE_TX) {
+        if (init_data && length <= FIXED_LENGTH_AT_SIZE) {
             memcpy(buf, init_data, length);
         } else {
             memset(buf, 0, sizeof(buf));
@@ -199,6 +199,14 @@ namespace InternalFunctionManagement {
     };
 }
 
+enum class EventSeverity : uint8_t {
+    Informative  = 0u,  ///< Informational events (no anomaly)
+    LowSeverity  = 1u,  ///< Low severity anomaly
+    MediumSeverity = 2u,///< Medium severity anomaly
+    HighSeverity = 3u,  ///< High severity anomaly
+};
+
+
 struct EventHandler {
     struct TaskState {
         uint8_t task_id;
@@ -217,16 +225,16 @@ struct EventHandler {
 
     bool pmon_active = false;
     uint8_t pmon_event = 0;
-
+    EventReportService::Event event = EventReportService::NotUsed;
+    bool real_time_active = false;
     char function_data_chars[50];
     uint16_t function_data_length_chars;
     String<ECSSEventDataAuxiliaryMaxSize> event_message;
-
+    EventSeverity event_severity = EventSeverity::Informative;
     bool debug_report_active;
 
     explicit EventHandler(SpacecraftErrorCode spacecraft_error_code = GENERIC_ERROR_NONE,
                           uint16_t id = 0,
-                          bool pmon = false,
                           const String<ECSSEventDataAuxiliaryMaxSize> msg = "")
         : task(), spacecraft_error(spacecraft_error_code),
           function_id(id),
@@ -243,7 +251,9 @@ struct CCSDSHEADER {
     uint8_t packet_version_number;
     uint8_t packet_type;
     uint8_t secondary_header_flag;
+    uint16_t raw_id;
     uint16_t application_process_ID;
+    uint16_t spacecraft_ID;
     uint16_t packet_data_length;
     uint8_t sequence_flags;
     uint16_t sequence_count;
@@ -263,12 +273,12 @@ inline bool heartbeatReceived = true;
 
 inline QueueHandle_t event_handler_queue;
 inline StaticQueue_t event_handler_buff;
-constexpr uint8_t event_handler_item_num = 50;
+constexpr uint8_t event_handler_item_num = 80;
 constexpr size_t event_handler_item_size = sizeof(EventHandler);
 inline uint8_t event_handler_storage_area[event_handler_item_num * event_handler_item_size];
 
 // TX Queue configuration
-constexpr uint8_t TX_QUEUE_ITEM_NUM = 40;
+constexpr uint8_t TX_QUEUE_ITEM_NUM = 100;
 constexpr size_t TX_ITEM_SIZE = sizeof(PacketHandler);
 inline QueueHandle_t g_tx_queue;
 inline StaticQueue_t g_tx_queue_buffer;
@@ -291,11 +301,10 @@ inline uint8_t TCQueueStorageArea[TCQueueItemNum * TCItemSize];
 const char* shortenPath(const char* path);
 void buildErrorContext(char* out, size_t size, const char* file, int line, const char* func);
 void reportError(const UnifiedModuleError& err, bool isr, uint16_t ms_to_wait_if_queue_is_full);
-void reportComponentFailure(Component failed_component, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 50);
-void performInternalFunction(InternalFunctionManagement::functionID function_id, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 50);
 void reportError(SpacecraftErrorCode code, bool isr, uint16_t ms_to_wait_if_queue_is_full);
-void reportError(SpacecraftErrorCode code, bool isr, uint16_t ms_to_wait_if_queue_is_full, const char* context);
-
+void reportError(SpacecraftErrorCode code, const char* context, bool real_time = false, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 100);
+void reportComponentFailure(Component failed_component, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 100);
+void performInternalFunction(InternalFunctionManagement::functionID function_id, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 100);
+void reportEvent(EventReportService::Event event,  String<ECSSEventDataAuxiliaryMaxSize> data, EventSeverity event_severity = EventSeverity::Informative, bool real_time = false, bool isr = false, uint16_t ms_to_wait_if_queue_is_full = 100);
 inline uint8_t EPSBuffer[EPS_BUF_SIZE]{};
-
 inline uint8_t g_rx_buf[FIXED_LENGTH_AT_SIZE_RX];

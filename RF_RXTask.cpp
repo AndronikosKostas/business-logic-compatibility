@@ -8,7 +8,7 @@ SpacecraftErrorCode RF_RXTask::physicalLayerFilter(uint8_t* buf, bool use_crc, b
     // BASIC CHECKS
 
     if (use_scramble) {
-        for (size_t i = 0 ; i < FIXED_LENGTH_AT_SIZE_RX; i++) {
+        for (size_t i = 0; i < FIXED_LENGTH_AT_SIZE_RX; i++) {
             buf[i] = buf[i] ^ LUT[i % 255];
         }
     }
@@ -21,7 +21,7 @@ SpacecraftErrorCode RF_RXTask::physicalLayerFilter(uint8_t* buf, bool use_crc, b
         uint32_t received_crc =
             (static_cast<uint32_t>(r_b0) << 24) |
             (static_cast<uint32_t>(r_b1) << 16) |
-            (static_cast<uint32_t>(r_b2) << 8)  |
+            (static_cast<uint32_t>(r_b2) << 8) |
             (static_cast<uint32_t>(r_b3));
 
         uint32_t computed_crc = etl::crc32_c(buf, buf + FIXED_LENGTH_AT_SIZE_RX - sizeof(uint32_t)).value();
@@ -29,31 +29,29 @@ SpacecraftErrorCode RF_RXTask::physicalLayerFilter(uint8_t* buf, bool use_crc, b
         // Break computed CRC into bytes
         uint8_t c_b0 = static_cast<uint8_t>((computed_crc >> 24) & 0xFF);
         uint8_t c_b1 = static_cast<uint8_t>((computed_crc >> 16) & 0xFF);
-        uint8_t c_b2 = static_cast<uint8_t>((computed_crc >> 8)  & 0xFF);
+        uint8_t c_b2 = static_cast<uint8_t>((computed_crc >> 8) & 0xFF);
         uint8_t c_b3 = static_cast<uint8_t>(computed_crc & 0xFF);
 
-        // Print the bytes (decimal)
-        LOG_DEBUG << "[RX] CRC bytes (received): "
-                  << static_cast<int>(r_b0) << " "
-                  << static_cast<int>(r_b1) << " "
-                  << static_cast<int>(r_b2) << " "
-                  << static_cast<int>(r_b3);
-
-        LOG_DEBUG << "[RX] CRC bytes (computed): "
-                  << static_cast<int>(c_b0) << " "
-                  << static_cast<int>(c_b1) << " "
-                  << static_cast<int>(c_b2) << " "
-                  << static_cast<int>(c_b3);
+        // // Print the bytes (decimal)
+        // LOG_DEBUG << "[RX] CRC bytes (received): "
+        //           << static_cast<int>(r_b0) << " "
+        //           << static_cast<int>(r_b1) << " "
+        //           << static_cast<int>(r_b2) << " "
+        //           << static_cast<int>(r_b3);
+        //
+        // LOG_DEBUG << "[RX] CRC bytes (computed): "
+        //           << static_cast<int>(c_b0) << " "
+        //           << static_cast<int>(c_b1) << " "
+        //           << static_cast<int>(c_b2) << " "
+        //           << static_cast<int>(c_b3);
 
         if (computed_crc != received_crc) {
-            LOG_ERROR << "[RX] CRC mismatch, computed: " << computed_crc;
-            LOG_ERROR << "[RX] CRC mismatch, received: " << received_crc;
+            // LOG_ERROR << "[RX] CRC mismatch, computed: " << computed_crc;
+            // LOG_ERROR << "[RX] CRC mismatch, received: " << received_crc;
             return TTC_ERROR_RX_WRONG_CRC;
         }
     }
 
-
-    // ADD ALSO SPACECRAFT ID
     return GENERIC_ERROR_NONE;
 }
 
@@ -76,16 +74,17 @@ SpacecraftErrorCode RF_RXTask::routePacket(const uint8_t* rx_buf, uint16_t ccsds
 
 
 SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSDSHEADER& header) {
-    // header.packet_version_number = (buf[0] >> 5) & 0x07;
-    // header.packet_type = (buf[0] >> 4) & 0x01;
-    // header.secondary_header_flag = (buf[0] >> 3) & 0x01;
-    header.application_process_ID = ((buf[0] & 0x07) << 8) | buf[1];
-    if (header.application_process_ID != TTC_APPLICATION_ID  && header.application_process_ID != OBC_APPLICATION_ID) {
+    header.raw_id = ((buf[0] & 0x07) << 8) | buf[1];
+    header.application_process_ID = (header.raw_id >> 9) & 0x3;
+    header.spacecraft_ID = header.raw_id & 0x01FF;
+    header.packet_data_length = (buf[4] << 8) | buf[5];
+
+    if (header.spacecraft_ID != SpacecraftID) {
+        return TTC_ERROR_RX_WRONG_SPACECRAFT_ID;
+    }
+    if (header.application_process_ID != TTC_APPLICATION_ID && header.application_process_ID != OBC_APPLICATION_ID) {
         return TTC_ERROR_RX_WRONG_APPLICATION_ID;
     }
-    // header.sequence_flags = (buf[2] >> 6) & 0x03;
-    // header.sequence_count = ((buf[2] & 0x3F) << 8) | buf[3];
-    header.packet_data_length = (buf[4] << 8) | buf[5];
     uint16_t ccsds_length = header.packet_data_length + CCSDSPrimaryHeaderSize + 1;
     if (ccsds_length > FIXED_LENGTH_AT_SIZE_RX - CRC_LENGTH) {
         return TTC_ERROR_RX_WRONG_SIZE_UP;
@@ -96,10 +95,10 @@ SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSD
 
 
 [[noreturn]] void RF_RXTask::execute() {
-   current_state_sub_state_ = RFRXTaskState::DISABLED;
-   SpacecraftErrorCode spacecraft_error_code = GENERIC_ERROR_NONE;
-   StateChangeMessage state_change_message = StateChangeFactory::FromRfrxState(current_state_sub_state_);
-    CCSDSHEADER ccsdheader{0,0,0,0,0};
+    RFRXTaskState current_state_sub_state_ = RFRXTaskState::DISABLED;
+    SpacecraftErrorCode spacecraft_error_code = GENERIC_ERROR_NONE;
+    StateChangeMessage state_change_message = StateChangeFactory::FromRfrxState(current_state_sub_state_);
+    CCSDSHEADER ccsdheader{0, 0, 0, 0, 0};
 
     while (true) {
         switch (current_state_sub_state_) {
@@ -111,7 +110,8 @@ SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSD
                 if (error_ != NO_ERRORS) {
                     UnifiedModuleError unified(error_);
                     spacecraft_error_code = mapSpacecraftErrorCode(unified);
-                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
+                    // reportEvent(EventReportService::RXTaskEvent, "CouldNotChangeFrequencyInit", EventSeverity::HighSeverity, true);
                     reportComponentFailure(Component::RF_TRANSCEIVER);
                 }
                 // ALWAYS AFTER SET FREQUENCY
@@ -119,7 +119,8 @@ SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSD
                 if (error_ != NO_ERRORS) {
                     UnifiedModuleError unified(error_);
                     spacecraft_error_code = mapSpacecraftErrorCode(unified);
-                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
+                    // reportEvent(EventReportService::RXTaskEvent, "CouldNotGetIntoRXInit", EventSeverity::HighSeverity, true);
                     reportComponentFailure(Component::RF_TRANSCEIVER);
                 }
 
@@ -132,19 +133,7 @@ SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSD
                     }
                     if (xTaskNotifyWaitIndexed(NOTIFY_INDEX_RXFE_RX, pdFALSE, 0xFFFFFFFF, &received_events_, pdMS_TO_TICKS(WAIT_FOR_NOTIFICATION)) == pdTRUE) {
                         if (xSemaphoreTake(transceiver_handler.task_level_resources_mtx, portMAX_DELAY) == pdTRUE) {
-                            LOG_DEBUG << "RX: RSSI: " << COMMSParameters::COMMS_LAST_RSSI;
-                            // At86rf215::turnOffUHFTXAmp();
-                            // auto result = transceiver.get_received_length(RF09, error_);
-                            // if (!result.has_value()) {
-                            //     UnifiedModuleError unifiedErr(error_);
-                            //     spacecraft_error_code = mapSpacecraftErrorCode(unifiedErr);
-                            //     // report the error
-                            //     REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
-                            // }
-                            // int16_t received_length = result.value();
-                            // int16_t length = received_length - AT86RF215_LENGTH_CORRECTION;
-                            // COMMSParameters::COMMS_RF_RX_LAST_RECEIVED_LENGTH = length;
-                            // LOG_DEBUG << "RX: Total RX Length: " << COMMSParameters::COMMS_RF_RX_LAST_RECEIVED_LENGTH;
+                            // LOG_DEBUG << "RX: RSSI: " << COMMSParameters::COMMS_LAST_RSSI;
                             // // Read the buf
                             transceiver.readRxBuf(g_rx_buf, FIXED_LENGTH_AT_SIZE_RX, error_);
                             // Parse & filter the packet
@@ -152,52 +141,47 @@ SpacecraftErrorCode RF_RXTask::filterCCSDSPrimaryHeader(const uint8_t* buf, CCSD
                                 UnifiedModuleError unifiedErr(error_);
                                 spacecraft_error_code = mapSpacecraftErrorCode(unifiedErr);
                                 // report the error
-                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
                             }
                             COMMSParameters::COMMS_RF_RX_TOTAL_RECEIVED_PACKETS = COMMSParameters::COMMS_RF_RX_TOTAL_RECEIVED_PACKETS + 1;
                             rf_rxtask->incrementCounter(RfRXCounterType::ReceivedPackets);
-                            spacecraft_error_code = physicalLayerFilter(g_rx_buf, true, true);
+                            spacecraft_error_code = physicalLayerFilter(g_rx_buf, COMMSParameters::COMMS_RF_CRC_ACTIVE, true);
                             // Counters handling
                             switch (spacecraft_error_code) {
-                                case SpacecraftErrorCode::GENERIC_ERROR_NONE:
+                                case GENERIC_ERROR_NONE:
                                     rf_rxtask->incrementCounter(RfRXCounterType::ReceivedOkPackets);
                                     COMMSParameters::COMMS_RF_RX_ΟΚ_RECEIVED_PACKETS = COMMSParameters::COMMS_RF_RX_ΟΚ_RECEIVED_PACKETS + 1;
                                     break;
-                                case SpacecraftErrorCode::TTC_ERROR_RX_WRONG_CRC:
+                                case TTC_ERROR_RX_WRONG_CRC:
                                     rf_rxtask->incrementCounter(RfRXCounterType::WrongCRCPackets);
-                                    rf_rxtask->incrementCounter(RfRXCounterType::DroppedPackets);
-                                    COMMSParameters::COMMS_RF_RX_TOTAL_DROPPED_PACKETS = COMMSParameters::COMMS_RF_RX_TOTAL_DROPPED_PACKETS + 1;
                                     COMMSParameters::COMMS_RF_RX_INVALID_CRC_PACKETS = COMMSParameters::COMMS_RF_RX_INVALID_CRC_PACKETS + 1;
                                     break;
                                 default:
-                                    rf_rxtask->incrementCounter(RfRXCounterType::DroppedPackets);
-                                    COMMSParameters::COMMS_RF_RX_TOTAL_DROPPED_PACKETS = COMMSParameters::COMMS_RF_RX_TOTAL_DROPPED_PACKETS + 1;
                                     break;
                             }
-                            printCounters();
+                            // printCounters();
                             if (spacecraft_error_code)
-                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
                             //
                             else {
                                 spacecraft_error_code = filterCCSDSPrimaryHeader(g_rx_buf, ccsdheader);
-                                if (spacecraft_error_code)
-                                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                                if (spacecraft_error_code) {
+                                    REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
+                                }
                                 else {
-                                    spacecraft_error_code = routePacket(g_rx_buf, ccsdheader.ccsds_length, 50);
+                                    spacecraft_error_code = routePacket(g_rx_buf, ccsdheader.ccsds_length, 100);
                                     if (spacecraft_error_code)
-                                        REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                                        REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
                                 }
                             }
-
                             At86rf215::ensureRXModeUpdated(error_, false);
                             if (error_ != NO_ERRORS) {
                                 UnifiedModuleError unifiedErr(error_);
                                 spacecraft_error_code = mapSpacecraftErrorCode(unifiedErr);
                                 // Report the error
-                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, false, 50);
+                                REPORT_ERROR_WITH_CONTEXT(spacecraft_error_code, true, false, 100);
                                 reportComponentFailure(Component::RF_TRANSCEIVER);
                             }
-
                             xSemaphoreGive(transceiver_handler.task_level_resources_mtx);
                         }
                     }
